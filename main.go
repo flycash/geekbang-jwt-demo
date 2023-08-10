@@ -3,9 +3,8 @@ package main
 import (
 	"github.com/flycash/geekbang-jwt-demo/ratelimit"
 	"github.com/gin-gonic/gin"
-	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,65 +15,52 @@ func main() {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379",
 	})
-	server.Use(ratelimit.NewBuilder(redisClient,
-		time.Second, 100).Build())
+	server.Use(ratelimit.NewBuilder(redisClient, time.Second, 100).Build())
 	server.Use(func(ctx *gin.Context) {
-		// 不需要登录校验
+		// 登录请求不需要校验
 		if ctx.Request.URL.Path == "/users/login" {
 			return
 		}
-		tokenHeader := ctx.GetHeader("Authorization")
-		if tokenHeader == "" {
-			// 没登录
+		// 我要在这里完成登录校验
+		auth := ctx.Request.Header.Get("Authorization")
+		if auth == "" {
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		//segs := strings.SplitN(tokenHeader, " ", 2)
-		segs := strings.Split(tokenHeader, " ")
+		segs := strings.Split(auth, " ")
 		if len(segs) != 2 {
-			// 格式不对，有人瞎搞
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
 		tokenStr := segs[1]
 		claims := &UserClaims{}
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
-			return []byte("95osj3fUD7fo0mlYdDbncXz4VD2igvf0"), nil
+			return []byte("moyn8y9abnd7q4zkq2m73yw8tu9j5ixm"), nil
 		})
 		if err != nil {
-			// token 不对，有人搞你
+			// 在这里，生产环境，你要是做的精致。你要监控和告警的
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+
+		if claims.UserAgent != ctx.Request.UserAgent() {
+			// 有人搞你
+			ctx.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+
 		if token == nil || !token.Valid || claims.Uid == 0 {
-			// 按照道理来说，是不可能走到这一步的
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+
 		now := time.Now()
-		if claims.ExpiresAt.Time.Before(now) {
-			// 过期了
-			ctx.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		if claims.UserAgent != ctx.GetHeader("User-Agent") {
-			// user agent 不相等
-			ctx.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		// 为了演示，假设十秒钟刷新一次
+		// 相当于说，还有 50 秒过期
 		if claims.ExpiresAt.Time.Sub(now) < time.Second*50 {
-			// 刷新
-			claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Minute))
-			tokenStr, err = token.SignedString([]byte("95osj3fUD7fo0mlYdDbncXz4VD2igvf0"))
-			if err != nil {
-				// 因为刷新这个事情，并不是一定要做的，所以这里可以考虑打印日志
-				// 暂时这样打印
-				log.Println(err)
-				return
-			}
+			// 通过校验之后，我要刷新过期时间
+			claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Second * 10))
+			tokenStr, _ = token.SignedString([]byte("moyn8y9abnd7q4zkq2m73yw8tu9j5ixm"))
 			ctx.Header("x-jwt-token", tokenStr)
-			log.Println("刷新了 token")
 		}
 	})
 	server.POST("/users/login", login)
@@ -101,28 +87,32 @@ func login(ctx *gin.Context) {
 	// 正常你应该是从数据库查询的
 	// 这里我们直接写死
 	if req.Email == "123@qq.com" && req.Password == "123456" {
+
+		// 这就是登录成功了
+		// 要做的就是在这里，生成一个 JWT token，返回给前端
+
 		var claims UserClaims
 		claims.Uid = 123
-		claims.UserAgent = ctx.GetHeader("User-Agent")
-		// 方便演示，我们设置一分钟过期
+		claims.UserAgent = ctx.Request.UserAgent()
 		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Minute))
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		tokenStr, err := token.SignedString([]byte("95osj3fUD7fo0mlYdDbncXz4VD2igvf0"))
+		tokenString, err := token.SignedString([]byte("moyn8y9abnd7q4zkq2m73yw8tu9j5ixm"))
 		if err != nil {
-			// 生成 token 的字符串失败，算是系统错误
-			// 你也可以考虑返回 500
+			// 你可以用 500
 			ctx.String(http.StatusOK, "系统错误")
+			return
 		}
-		ctx.Header("x-jwt-token", tokenStr)
+		ctx.Header("x-jwt-token", tokenString)
 		ctx.String(http.StatusOK, "登录成功")
 		return
 	}
 	ctx.String(http.StatusOK, "用户名或者账号错误")
 }
 
+// UserClaims 我们要在 JWT token 里面放的数据
 type UserClaims struct {
 	jwt.RegisteredClaims
-	// 假设我们这里要准备在 JWT 里面放一个 Uid
+	// 用户 ID
 	Uid       int64
 	UserAgent string
 }

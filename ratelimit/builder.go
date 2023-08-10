@@ -55,6 +55,7 @@ func (b *Builder) Build() gin.HandlerFunc {
 }
 
 func (b *Builder) limit(ctx *gin.Context) (bool, error) {
+	// ip-limiter-10.12.13.1
 	key := fmt.Sprintf("%s:%s", b.prefix, ctx.ClientIP())
 	return b.cmd.Eval(ctx, luaScript, []string{key},
 		b.interval.Milliseconds(), b.rate, time.Now().UnixMilli()).Bool()
